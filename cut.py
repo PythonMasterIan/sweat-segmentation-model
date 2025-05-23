@@ -1,5 +1,5 @@
 import matplotlib
-matplotlib.use("TkAgg") 
+matplotlib.use("TkAgg")
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,14 +8,14 @@ import time
 import datetime
 import csv
 import sys
-from tkinter import simpledialog, Tk
+from tkinter import simpledialog, Tk, filedialog
 
 # 初始化 tkinter
 tk_root = Tk()
 tk_root.withdraw()
 
-def extract_circle_colors(image_path, output_dir='output', 
-                         dp=1, min_dist=150, param1=100, param2=47, 
+def extract_circle_colors(image_path, output_dir='output',
+                         dp=1, min_dist=150, param1=100, param2=47,
                          min_radius=200, max_radius=250,
                          show_results=True, save_results=True):
     """
@@ -38,17 +38,7 @@ def extract_circle_colors(image_path, output_dir='output',
     os.makedirs(output_path, exist_ok=True)
     print(f"✅ 使用輸出目錄: {output_path}")
     
-    # 初始化 all_labels.csv 檔案（如果不存在就建立並寫入表頭）
-    label_csv_path = "all_labels.csv"
-    csv_exists = os.path.exists(label_csv_path)
-    
-    if not csv_exists:
-        with open(label_csv_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['filename', 'ph_value', 'date_created', 'source_image'])
-        print(f"✅ 創建標籤文件: {label_csv_path}")
-    else:
-        print(f"✅ 使用現有標籤文件: {label_csv_path}")
+    # 單張模式下不再初始化 all_labels.csv
     
     # 載入圖像
     print(f"🔍 正在載入圖像：{image_path}")
@@ -110,21 +100,115 @@ def extract_circle_colors(image_path, output_dir='output',
         return None, None, None
     
     # 轉換為整數坐標
-    circles = np.uint16(np.around(circles))
-    
-    # 已註解掉的過濾重疊圓形區塊已安全移除
-    
-    print(f"✅ 偵測到 {len(circles[0])} 個圓形")
-    
-    # 在原始圖像上標記檢測到的圓形
-    marked_image = original.copy()
-    for i, (x, y, r) in enumerate(circles[0, :]):
-        # 畫圓和中心點
-        cv2.circle(marked_image, (x, y), r, (0, 255, 0), 2)
-        cv2.circle(marked_image, (x, y), 2, (0, 0, 255), 3)
-        # 標記編號
-        cv2.putText(marked_image, f"{i+1}", (x-10, y-r-10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    if circles is not None:
+        circles = np.uint16(np.around(circles))
+
+    # 永遠詢問是否補充手動標記
+    count_detected = 0 if circles is None else len(circles[0])
+    print(f"⚠️ 偵測到 {count_detected} 個圓形")
+
+    # 詢問使用者是否要進入手動補充模式
+    user_select_manual = simpledialog.askstring("補充標記", f"目前偵測到 {count_detected} 個圓形，是否要補充標記？(y/n)", parent=tk_root)
+    if user_select_manual is None or user_select_manual.strip().lower() != "y":
+        print("🔵 使用者選擇不進入手動補充模式")
+        if circles is None:
+            print("❌ 無有效圓形，結束")
+            return None, None, None
+        # 若有圓形，直接畫標記圖
+        marked_image = original.copy()
+        for i, (x, y, r) in enumerate(circles[0, :]):
+            # 畫圓和中心點
+            cv2.circle(marked_image, (x, y), r, (0, 255, 0), 2)
+            cv2.circle(marked_image, (x, y), 2, (0, 0, 255), 3)
+            # 標記編號 (加大字體、黑色)
+            cv2.putText(marked_image, f"{i+1}", (x-20, y-r-20),
+                       cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 0, 0), 10)
+    else:
+        print("🖱️ 使用者選擇進入手動標記模式")
+        # 後面原本的手動補選程式保留，無需修改
+        manual_circles = []
+        from matplotlib.widgets import RectangleSelector
+
+        # 若已有自動偵測結果，先畫出來（僅初始化底圖，不重繪circles）
+        marked_image = original.copy()
+        # 新增：畫出已偵測到的圓形（綠色框）
+        if circles is not None:
+            for i, (x, y, r) in enumerate(circles[0, :]):
+                cv2.circle(marked_image, (x, y), r, (0, 255, 0), 2)
+                cv2.circle(marked_image, (x, y), 2, (0, 0, 255), 3)
+                cv2.putText(marked_image, f"{i+1}", (x-20, y-r-20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 0), 4)
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(cv2.cvtColor(marked_image, cv2.COLOR_BGR2RGB))
+        ax.set_title("拖曳滑鼠以補充標記圓形（正圓）區域（ESC取消上次，關閉視窗結束）")
+        plt.axis('off')
+
+        # RectangleSelector callback (drawn rectangle converted to circle)
+        def on_select(eclick, erelease):
+            x1, y1 = eclick.xdata, eclick.ydata
+            x2, y2 = erelease.xdata, erelease.ydata
+            xc = int(round((x1 + x2) / 2.0))
+            yc = int(round((y1 + y2) / 2.0))
+            side = min(abs(x2 - x1), abs(y2 - y1)) / 2.0
+            r = int(round(side))
+            if r > 0:
+                manual_circles.append((xc, yc, r))
+                # Draw the circle
+                cv2.circle(marked_image, (xc, yc), r, (255, 0, 0), 2)
+                ax.cla()
+                ax.imshow(cv2.cvtColor(marked_image, cv2.COLOR_BGR2RGB))
+                ax.set_title("拖曳滑鼠以補充標記圓形（正圓）區域（ESC取消上次，關閉視窗結束）")
+                plt.axis('off')
+                plt.draw()
+                print(f"🖱️ 拖曳座標: ({int(x1)}, {int(y1)}) 到 ({int(x2)}, {int(y2)})，中心: ({xc}, {yc}), 半徑: {r}")
+
+        # 新增 ESC 取消選取功能
+        def on_keypress(event):
+            if event.key == 'escape' and manual_circles:
+                print("↩️ 取消上一次選取的圓形")
+                manual_circles.pop()  # 移除最後一個圓形
+                marked_image = original.copy()
+                # 只重繪 manual_circles，確保被取消的圓形不會再次顯示
+                for x, y, r in manual_circles:
+                    cv2.circle(marked_image, (x, y), r, (255, 0, 0), 2)
+
+                ax.clear()
+                ax.imshow(cv2.cvtColor(marked_image, cv2.COLOR_BGR2RGB))
+                ax.set_title("拖曳滑鼠以補充標記圓形（正圓）區域（按ESC取消上次，關閉視窗結束）")
+                plt.axis('off')
+                plt.draw()
+
+        rectangle_selector = RectangleSelector(
+            ax,
+            on_select,
+            useblit=True,
+            button=[1],  # left mouse
+            minspanx=5, minspany=5,
+            spancoords='pixels',
+            interactive=True,
+        )
+
+        fig.canvas.mpl_connect('key_press_event', on_keypress)
+
+        print("🔵 拖曳滑鼠於圖像上以圈選圓形，完成後請關閉視窗。")
+        plt.show(block = True)
+
+        # 完成後將手動畫的圓形加入circles
+        if manual_circles:
+            manual_arr = np.array([[x, y, r] for x, y, r in manual_circles], dtype=np.uint16).reshape(1, -1, 3)
+            if circles is not None:
+                circles = np.concatenate([circles, manual_arr], axis=1)
+            else:
+                circles = manual_arr
+            print(f"✅ 使用者補充標記了 {len(manual_circles)} 個圓形，總計 {len(circles[0])} 個圓形")
+            input("🔽 標記已完成，請按 Enter 繼續選擇要處理的圓形...")
+        else:
+            if circles is None:
+                print("❌ 無法檢測或標記圓形，結束")
+                return None, None, None
+            else:
+                print("🔵 未補充新標記，繼續使用已偵測的圓形")
     
     # 顯示標記後的圖像，讓使用者了解圓形編號
     plt.figure(figsize=(10, 8))
@@ -132,9 +216,6 @@ def extract_circle_colors(image_path, output_dir='output',
     plt.title(f'偵測到 {len(circles[0])} 個圓形')
     plt.axis('off')
     
-    # 保存初始標記圖像，以便之後參考
-    initial_marked_image_path = os.path.join(output_path, f'{base_filename}_marked.jpg')
-    cv2.imwrite(initial_marked_image_path, marked_image)
     
     # 顯示圖像並等待用戶輸入
     plt.draw()
@@ -209,8 +290,8 @@ def extract_circle_colors(image_path, output_dir='output',
             avg_color_rgb = (int(avg_color[2]), int(avg_color[1]), int(avg_color[0]))
             circle_colors.append(avg_color_rgb)
             # 在結果圖像上標記編號和顏色值
-            cv2.putText(result_image, f"{circle_idx+1}", (x-10, y-r-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+            cv2.putText(result_image, f"{circle_idx+1}", (x-20, y-r-20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 0, 0), 10)
             # 繪製顏色方塊
             cv2.rectangle(result_image, (x+r+5, y-15), (x+r+35, y+15),
                           (int(avg_color[0]), int(avg_color[1]), int(avg_color[2])), -1)
@@ -240,38 +321,42 @@ def extract_circle_colors(image_path, output_dir='output',
     
     # 顯示裁切的圓形與原始標記圖像並排顯示
     if cropped_circles:
-        # 創建一個新的大圖，包含原始標記圖像和裁切圓形
+        # 在同一個 figure 中用 subplot 顯示原圖和裁切圖
         fig = plt.figure(figsize=(18, 10))
-        
-        # 左側：顯示原始標記圖像
-        plt.subplot(1, 2, 1)
-        plt.imshow(cv2.cvtColor(marked_image, cv2.COLOR_BGR2RGB))
-        plt.title('原始標記圖像')
-        plt.axis('off')
-        
-        # 右側：顯示裁切的圓形
-        plt.subplot(1, 2, 2)
-        rows = (len(cropped_circles) + 3) // 4
-        grid_fig = plt.figure(figsize=(12, 3 * rows))
-        
+
+        # 左側：原始標記圖像
+        ax1 = plt.subplot(1, 2, 1)
+        ax1.imshow(cv2.cvtColor(marked_image, cv2.COLOR_BGR2RGB))
+        ax1.set_title('原始標記圖像')
+        ax1.axis('off')
+
+        # 右側：裁切圖像們，組合成一張網格圖像
+        ax2 = plt.subplot(1, 2, 2)
+        num = len(cropped_circles)
+        grid_cols = 4
+        grid_rows = (num + grid_cols - 1) // grid_cols
+        thumb_h, thumb_w = 100, 100
+        canvas = np.ones((grid_rows * thumb_h, grid_cols * thumb_w, 3), dtype=np.uint8) * 255
+
         for i, crop in enumerate(cropped_circles):
-            plt.subplot(rows, 4, i+1)
-            try:
-                if crop is not None and crop.size > 0 and not np.all(crop == 0):
-                    plt.imshow(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                else:
-                    plt.text(0.5, 0.5, '無效區域', ha='center', va='center')
-            except:
-                plt.text(0.5, 0.5, '顯示錯誤', ha='center', va='center')
-            plt.title(f'圓形 {original_indices[i]+1}')
-            plt.axis('off')
-        
+            if crop is not None and crop.size > 0 and not np.all(crop == 0):
+                resized = cv2.resize(crop, (thumb_w, thumb_h))
+            else:
+                resized = np.zeros((thumb_h, thumb_w, 3), dtype=np.uint8)
+                cv2.putText(resized, '無效', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+            row = i // grid_cols
+            col = i % grid_cols
+            canvas[row*thumb_h:(row+1)*thumb_h, col*thumb_w:(col+1)*thumb_w] = resized
+
+        ax2.imshow(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
+        ax2.set_title('裁切圓形預覽')
+        ax2.axis('off')
+
         plt.tight_layout()
-        
-        # 顯示圖像
         plt.draw()
         print("\n>>> 正在顯示裁切結果，請參考圖中編號 <<<")
-        plt.pause(0.1)  # 必要的暫停，以確保GUI更新
+        plt.pause(0.1)
         
         # 詢問要保存哪些圓形
         save_indices_input = simpledialog.askstring("保存圓形", "\n請輸入要保存的圓形編號（以逗號分隔，例如：1,3,5），或按Enter保存所有處理過的圓形：", parent=tk_root)
@@ -300,7 +385,7 @@ def extract_circle_colors(image_path, output_dir='output',
             saved_count = 0
             saved_indices = []
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
+
             # 收集所有 pH 值，允許 "testdrop" 關鍵字
             ph_values = {}
             for i in indices_to_save:
@@ -311,38 +396,43 @@ def extract_circle_colors(image_path, output_dir='output',
                         f"請輸入圓形 {orig_idx+1} 的 pH 值（可為小數，可輸入 'testdrop' 表示測試液）：",
                         parent=tk_root
                     )
-                    if ph_value is None:
-                        ph_value = ""
-                    ph_value = ph_value.strip()
+                    ph_value = (ph_value or "").strip()
+                    if not ph_value:
+                        ph_value = "unknown"
                     # 允許 "testdrop" 作為 ph_value
                     ph_values[i] = ph_value
-            
-            # 保存所有圖像和更新 CSV
-            with open(label_csv_path, 'a', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f)
-                
+
+            # 準備單一 CSV 檔
+            csv_name = f"{base_filename}.csv"
+            csv_path = os.path.join(output_path, csv_name)
+            # 'w' 模式會覆蓋同名檔案，若存在則覆蓋
+            with open(csv_path, 'w', encoding='utf-8', newline='') as fcsv:
+                writer = csv.writer(fcsv)
+                writer.writerow(['filename', 'ph_value', 'date_created', 'source_image', 'rgb_color'])
+
                 for i in indices_to_save:
                     if 0 <= i < len(cropped_circles):
                         crop = cropped_circles[i]
                         orig_idx = original_indices[i]
-                        
+
                         if crop is not None and crop.size > 0 and not np.all(crop == 0):
-                            # 生成唯一文件名（包含原始圖片名、圓形編號和時間戳）
+                            # 生成唯一文件名
                             filename = f'{base_filename}_circle_{orig_idx+1}_{timestamp}.jpg'
                             save_path = os.path.join(output_path, filename)
-                            
+
                             # 保存圖像
                             cv2.imwrite(save_path, crop)
                             print(f"✅ 已保存圓形 {orig_idx+1} 到 {save_path}")
-                            
-                            # 寫入 CSV
+
+                            # 寫入同一 CSV，增加rgb_color欄位
                             writer.writerow([
-                                filename, 
+                                filename,
                                 ph_values[i],
                                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                os.path.basename(image_path)
+                                os.path.basename(image_path),
+                                str(circle_colors[i])  # RGB tuple as string
                             ])
-                            
+
                             saved_count += 1
                             saved_indices.append(orig_idx)
             print(f"\n✨ 總共成功保存了 {saved_count} 個圓形及其 pH 值到 {output_path}")
@@ -390,127 +480,6 @@ def extract_circle_colors(image_path, output_dir='output',
     
     return circles[0], circle_colors, cropped_circles
 
-# 設定參數自動搜索功能
-def auto_tune_parameters(image_path, target_count=7, base_min_radius=15, base_max_radius=60):
-    """
-    自動調整參數尋找最佳圓形檢測結果
-    
-    參數:
-        image_path: 輸入圖像路徑
-        target_count: 目標圓形數量 
-        base_min_radius: 基礎最小半徑
-        base_max_radius: 基礎最大半徑
-        
-    返回:
-        最佳參數設置
-    """
-    print("🔍 開始自動調整參數...")
-    start_time = time.time()
-    
-    # 載入圖像
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"❌ 無法載入圖像：{image_path}")
-        return None
-    
-    # 轉換為灰度並模糊
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # 初步估計圓形大小
-    height, width = gray.shape
-    min_dimension = min(height, width)
-    
-    # 根據圖像大小動態調整半徑範圍
-    estimated_radius = min_dimension / 15  # 假設圖像中的圓形約佔圖像的1/15
-    
-    # 調整半徑搜索範圍
-    if base_min_radius == 15 and base_max_radius == 60:  # 如果使用默認值，則進行動態調整
-        base_min_radius = max(15, int(estimated_radius * 0.6))
-        base_max_radius = min(int(estimated_radius * 1.4), min_dimension // 2)
-        print(f"⚙️ 基於圖像大小調整半徑搜索範圍: {base_min_radius}-{base_max_radius}")
-    
-    # 嘗試不同參數組合
-    best_params = None
-    best_circle_count = 0
-    
-    # 參數範圍
-    dp_values = [1.0, 1.2, 1.5]
-    min_dist_values = [int(base_min_radius*1.5), int(base_min_radius*2), int(base_min_radius*3)]
-    param1_values = [80, 100, 120]
-    param2_values = [20, 30, 40, 50]
-    
-    total_combinations = len(dp_values) * len(min_dist_values) * len(param1_values) * len(param2_values)
-    current_combination = 0
-    
-    print(f"🔄 將嘗試 {total_combinations} 種參數組合...")
-    
-    for dp in dp_values:
-        for min_dist in min_dist_values:
-            for param1 in param1_values:
-                for param2 in param2_values:
-                    current_combination += 1
-                    
-                    # 進度顯示
-                    progress = (current_combination / total_combinations) * 100
-                    sys.stdout.write(f"\r⏳ 進度: {progress:.1f}% [{current_combination}/{total_combinations}]")
-                    sys.stdout.flush()
-                    
-                    # 嘗試當前參數組合
-                    try:
-                        circles = cv2.HoughCircles(
-                            blurred,
-                            cv2.HOUGH_GRADIENT,
-                            dp=dp,
-                            minDist=min_dist,
-                            param1=param1,
-                            param2=param2,
-                            minRadius=base_min_radius,
-                            maxRadius=base_max_radius
-                        )
-                        
-                        # 如果找到圓形
-                        if circles is not None:
-                            circle_count = len(circles[0])
-                            
-                            # 如果找到目標數量的圓形，就是我們想要的結果
-                            if circle_count == target_count:
-                                print(f"\n✅ 找到最佳參數: dp={dp}, minDist={min_dist}, param1={param1}, param2={param2}")
-                                return {
-                                    'dp': dp,
-                                    'min_dist': min_dist,
-                                    'param1': param1,
-                                    'param2': param2,
-                                    'min_radius': base_min_radius,
-                                    'max_radius': base_max_radius
-                                }
-                            
-                            # 儲存最接近目標的結果
-                            if best_params is None or abs(circle_count - target_count) < abs(best_circle_count - target_count):
-                                best_params = {
-                                    'dp': dp,
-                                    'min_dist': min_dist,
-                                    'param1': param1,
-                                    'param2': param2,
-                                    'min_radius': base_min_radius,
-                                    'max_radius': base_max_radius
-                                }
-                                best_circle_count = circle_count
-                    except Exception as e:
-                        # 某些參數組合可能會導致錯誤，忽略它們
-                        continue
-    
-    print()  # 換行，完成進度顯示
-    
-    # 如果沒有找到目標數量的圓形，返回最接近的結果
-    if best_params:
-        end_time = time.time()
-        print(f"⚠️ 未找到正好{target_count}個圓形，最接近的參數檢測到 {best_circle_count} 個圓形")
-        print(f"⏱️ 參數調整用時: {end_time - start_time:.2f} 秒")
-        return best_params
-    else:
-        print("❌ 無法找到合適的參數")
-        return None
 
 def batch_process(input_dir, output_dir="all_data", target_count=7):
     """
@@ -559,97 +528,72 @@ def batch_process(input_dir, output_dir="all_data", target_count=7):
     print(f"\n✨ 批處理完成! 所有結果已保存到 {output_dir}")
 
 if __name__ == "__main__":
-    # 設置參數
     print("\n" + "="*50)
     print("🔍 圓形區域檢測與pH值標記工具 🎨")
     print("="*50)
-    
-    # 選擇功能模式
-    print("\n請選擇操作模式:")
-    print("1. 處理單張圖片")
-    print("2. 批量處理目錄")
-    mode = simpledialog.askstring("選擇模式", "請選擇操作模式 (1:單張圖片, 2:批量處理目錄):", parent=tk_root)
-    if mode is None:
-        mode = "1"
-    mode = mode.strip()
-    
-    if mode == "2":
-        # 批量處理模式
-        input_dir = simpledialog.askstring("輸入目錄", "請輸入包含圖像的目錄路徑:", parent=tk_root)
-        if input_dir is None or not os.path.isdir(input_dir):
-            print(f"❌ 目錄不存在: {input_dir}")
-            exit(1)
-        
-        target_count_input = simpledialog.askstring("期望圓形數量", "請輸入期望每張圖像中的圓形數量 (默認7):", parent=tk_root)
-        if target_count_input is None or not target_count_input.strip():
+
+    last_dir_path = os.getcwd()
+
+    while True:
+        # 選擇功能模式
+        print("\n請選擇操作模式:")
+        print("1. 處理單張圖片")
+        print("2. 批量處理目錄")
+        mode = simpledialog.askstring("選擇模式", "請選擇操作模式 (1:單張圖片, 2:批量處理目錄):", parent=tk_root)
+        if mode is None:
+            mode = "1"
+        mode = mode.strip()
+
+        if mode == "2":
+            # 批量處理模式
+            input_dir = filedialog.askdirectory(title="選擇包含圖像的目錄", initialdir=last_dir_path)
+            if not input_dir or not os.path.isdir(input_dir):
+                print(f"❌ 目錄不存在: {input_dir}")
+                break
+            last_dir_path = input_dir
+            # 固定目標圓形數量為7
             target_count = 7
+            batch_process(input_dir, target_count=target_count)
+            break
         else:
-            target_count = int(target_count_input)
-        batch_process(input_dir, target_count=target_count)
-    else:
-        # 單張圖片處理模式
-        image_path = simpledialog.askstring("圖像路徑", "請輸入圖像路徑:", parent=tk_root)
-        if image_path is None or not os.path.isfile(image_path):
-            print(f"❌ 文件不存在: {image_path}")
-            exit(1)
-        
-        use_auto_tune_input = simpledialog.askstring("自動調參", "是否使用自動調參功能? (y/n):", parent=tk_root)
-        use_auto_tune = (use_auto_tune_input or "").lower() == 'y'
-        
-        if use_auto_tune:
-            # 自動調整參數
-            target_count_input = simpledialog.askstring("期望圓形數量", "請輸入期望的圓形數量 (默認7):", parent=tk_root)
-            if target_count_input is None or not target_count_input.strip():
-                target_count = 7
-            else:
-                target_count = int(target_count_input)
-            best_params = auto_tune_parameters(image_path, target_count=target_count)
-            
-            if best_params:
-                # 使用最佳參數執行檢測和提取
+            # 單張圖片處理模式
+            while True:
+                image_path = filedialog.askopenfilename(
+                    title="選擇圖片檔案",
+                    initialdir=last_dir_path,
+                    filetypes=[("Image Files", "*.jpg *.jpeg *.png *.bmp *.tif *.tiff")]
+                )
+                if not image_path or not os.path.isfile(image_path):
+                    print(f"❌ 文件不存在: {image_path}")
+                    # 詢問是否繼續
+                    retry = simpledialog.askstring("未選擇檔案", "未選擇檔案，是否要結束？(y/n):", parent=tk_root)
+                    if retry and retry.strip().lower() == "y":
+                        sys.exit(0)
+                    else:
+                        continue
+                last_dir_path = os.path.dirname(image_path)
+
+                # 執行檢測和提取（使用固定參數）
                 circles, colors, crops = extract_circle_colors(
                     image_path=image_path,
-                    dp=best_params['dp'],
-                    min_dist=best_params['min_dist'],
-                    param1=best_params['param1'],
-                    param2=best_params['param2'],
-                    min_radius=best_params['min_radius'],
-                    max_radius=best_params['max_radius'],
+                    dp=1,
+                    min_dist=150,
+                    param1=100,
+                    param2=47,
+                    min_radius=200,
+                    max_radius=250,
                     show_results=True,
                     save_results=True
                 )
-        else:
-            # 使用手動設置的參數
-            dp_input = simpledialog.askstring("dp參數", "輸入dp參數 (建議1.0-2.0):", parent=tk_root)
-            dp = float(dp_input) if dp_input and dp_input.strip() else 1
-            min_dist_input = simpledialog.askstring("圓心最小距離", "輸入圓心最小距離 (建議30-150):", parent=tk_root)
-            min_dist = int(min_dist_input) if min_dist_input and min_dist_input.strip() else 150
-            param1_input = simpledialog.askstring("param1", "輸入param1參數 (建議80-120):", parent=tk_root)
-            param1 = int(param1_input) if param1_input and param1_input.strip() else 100
-            param2_input = simpledialog.askstring("param2", "輸入param2參數 (建議20-50):", parent=tk_root)
-            param2 = int(param2_input) if param2_input and param2_input.strip() else 47
-            min_radius_input = simpledialog.askstring("最小半徑", "輸入最小半徑 (像素):", parent=tk_root)
-            min_radius = int(min_radius_input) if min_radius_input and min_radius_input.strip() else 200
-            max_radius_input = simpledialog.askstring("最大半徑", "輸入最大半徑 (像素):", parent=tk_root)
-            max_radius = int(max_radius_input) if max_radius_input and max_radius_input.strip() else 250
-            
-            # 執行檢測和提取
-            circles, colors, crops = extract_circle_colors(
-                image_path=image_path,
-                dp=dp,
-                min_dist=min_dist,
-                param1=param1,
-                param2=param2,
-                min_radius=min_radius,
-                max_radius=max_radius,
-                show_results=True,
-                save_results=True
-            )
-        
-        # 顯示提取的顏色值
-        if circles is not None and colors:
-            print("\n🎨 提取的顏色值:")
-            for i, color in enumerate(colors):
-                print(f"圓形 {i+1}: RGB = {color}")
-        
-        print("\n✨ 處理完成! ✨")
+
+                # 顯示提取的顏色值
+                if circles is not None and colors:
+                    print("\n🎨 提取的顏色值:")
+                    for i, color in enumerate(colors):
+                        print(f"圓形 {i+1}: RGB = {color}")
+
+                print("\n✨ 處理完成! ✨")
+                # 處理完一張圖片自動跳出下次選擇
+                # 直接重新進入下一輪選擇，不回到終端機
+                # 若使用者取消選擇，詢問是否結束
+                # 這個 while True 只會在用戶選擇結束時才 break
