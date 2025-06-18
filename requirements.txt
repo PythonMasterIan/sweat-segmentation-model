@@ -3,3 +3,4 @@ Werkzeug
 Pillow
 numpy
 flask-cors
+torch
