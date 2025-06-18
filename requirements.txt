@@ -4,4 +4,4 @@ Pillow
 numpy
 flask-cors
 torch
-pandas
+pandasopencv-python-headless
