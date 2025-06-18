@@ -4,3 +4,4 @@ Pillow
 numpy
 flask-cors
 torch
+pandas
